@@ -1,6 +1,6 @@
 import tkinter as tk
 import threading
-
+import time
 
 def login_window():
     log_win = tk.Tk()
@@ -24,12 +24,20 @@ def login_window():
     ser_check.pack()
     cli_check.pack()
     right_button.pack()
+    threading.Thread(target=des,args=(log_win,)).start()
     # addr_lable.place(x=10,y=10)
     log_win.mainloop()
+    print('des')
+    log_win.destroy()
 
 
+def des(win):
+    time.sleep(5)
+    win.quit()
+    print('finish')
 
 if __name__ == '__main__':
     login_window()
+
     print('here')
     # login_window()

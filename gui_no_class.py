@@ -1,4 +1,4 @@
-import socket
+import socket,select
 import tkinter as tk
 import cv2 as cv
 import threading
@@ -11,6 +11,7 @@ import os,sys
 import time
 import numpy
 from PIL import Image,ImageTk
+import eventlet
 
 global_file_seg = 5000
 test_img = 0
@@ -65,15 +66,25 @@ class chartroom:
         (length,) = struct.unpack('i',raw_len)
         return length
 
+    def json_encode_send(self,num,data):
+        json_data = {'type':str(num),'data':data}
+        self.send_queue_list[num].put(json.dumps(json_data).encode('utf-8'))
+
     def mess_send(self):
         while True:
-            for i in range(5):
-                if not self.send_queue_list[i].empty():
-                    send_data = {"type":str(i),"data":self.send_queue_list[i].get()}
-                    json_data = json.dumps(send_data).encode('utf-8')
-                    # print('send',send_data)
-                    self.mess_len_send(json_data)
-                    self.sock.sendall(json_data)
+            can_read,_,_ = select.select(self.send_queue_list,[],[])
+            for i in can_read:
+                # print('send',i)
+                send_data=i.get()
+                self.mess_len_send(send_data)
+                self.sock.sendall(send_data)
+            # for i in range(5):
+            #     if not self.send_queue_list[i].empty():
+            #         send_data = {"type":str(i),"data":self.send_queue_list[i].get()}
+            #         json_data = json.dumps(send_data).encode('utf-8')
+            #         # print('send',send_data)
+            #         self.mess_len_send(json_data)
+            #         self.sock.sendall(json_data)
 
     def mess_recv(self):
         while True:
@@ -112,7 +123,8 @@ class chartroom:
     def call_video_send(self,con=1):
         if con :
             con_data = {'trans_type':'video','trans_command':'start'}
-            self.send_queue_list[0].put(con_data)
+            # self.send_queue_list[0].put(con_data)
+            self.json_encode_send(0,con_data)
         self.video_end = 0
         video_send_thread = threading.Thread(target=self.video_send)
         video_send_thread.start()
@@ -127,9 +139,12 @@ class chartroom:
             else:
                 ret,frame = cap.read()
             if ret:
+                frame = cv.resize(frame,(1280,720),interpolation=cv.INTER_CUBIC)
                 byte_img = cv.imencode('.png',frame)[1]
                 byte_array = numpy.array(byte_img)
-                self.send_queue_list[3].put(base64.b64encode(byte_array.tostring()).decode('utf-8'))
+                # self.send_queue_list[3].put(base64.b64encode(byte_array.tostring()).decode('utf-8'))
+                self.json_encode_send(3,base64.b64encode(byte_array.tostring()).decode('utf-8'))
+                # time.sleep(1)
 
     def call_video_recv(self):
         print('call_video_recv')
@@ -138,10 +153,37 @@ class chartroom:
         window.geometry(str(self.video_window_width)+'x'+str(self.video_window_height))
         labelPic = tk.Label(window)#,height=self.video_window_height,width=self.video_window_width)
         labelPic.pack()
-        video_recv_thread = threading.Thread(target=self.video_recv,args=(window,labelPic))
-        video_recv_thread.start()
+        # video_recv_thread = threading.Thread(target=self.video_recv,args=(window,labelPic))
+        # video_recv_thread.start()
+        # self.test_recv(window,labelPic)
+        window.after(40, lambda: self.test_recv(window, labelPic))
         window.mainloop()
         window.destroy()
+
+    def test_recv(self,win,labelPic):
+        if self.recv_queue_list[1].empty():
+            win.after(40, lambda: self.test_recv(win, labelPic))
+            return
+        data = self.recv_queue_list[1].get()
+        data = base64.b64decode(data.encode('utf-8'))
+        cv_img = cv.imdecode(numpy.frombuffer(data, numpy.uint8), cv.IMREAD_COLOR)
+        # cv.imshow('test',cv_img)
+        # cv.waitKey(50)
+        rgba_img = cv.cvtColor(cv_img, cv.COLOR_BGR2RGBA)
+        # tk_img = self.pic_resize(rgba_img)
+        temp_img = Image.fromarray(rgba_img)
+        global test_img
+        test_2 = ImageTk.PhotoImage(image=temp_img, master=win)
+        # tk_img = ImageTk.PhotoImage(image=temp_img,master=win)
+
+        # test_img.paste(temp_img)
+        test_img = test_2
+        labelPic.image = test_img
+        labelPic.configure(image=test_img)
+
+        # self.video_lock.release()
+        win.after(40, lambda: self.test_recv(win, labelPic))
+
 
     def video_recv(self,win,labelPic):
         while not self.video_end:
@@ -152,20 +194,23 @@ class chartroom:
                 data = base64.b64decode(data.encode('utf-8'))
                 cv_img = cv.imdecode(numpy.frombuffer(data,numpy.uint8),cv.IMREAD_COLOR)
                 # cv.imshow('test',cv_img)
-                # cv.waitKey(100)
+                # cv.waitKey(50)
                 rgba_img = cv.cvtColor(cv_img,cv.COLOR_BGR2RGBA)
                 # tk_img = self.pic_resize(rgba_img)
                 temp_img = Image.fromarray(rgba_img)
-
                 global test_img
-                test_img = ImageTk.PhotoImage(image=temp_img, master=win)
+                test_2 = ImageTk.PhotoImage(image=temp_img, master=win)
                 # tk_img = ImageTk.PhotoImage(image=temp_img,master=win)
-                # labelPic.image = tk_img
+
+                # test_img.paste(temp_img)
+                test_img = test_2
+                labelPic.image = test_img
                 if a==0 :
                     labelPic.configure(image=test_img)
                 else:
                     a=1
                 self.video_lock.release()
+                # win.after(100,lambda : self.video_recv(win,labelPic))
                 # print('successful')
         win.quit()
 
@@ -224,7 +269,8 @@ class chartroom:
         file_name = os.path.basename(file_path)
         file_len = os.path.getsize(file_path)
         con_data = {'trans_type':'file','trans_command':'start','file_name':file_name,'file_len':file_len}
-        self.send_queue_list[0].put(con_data)
+        # self.send_queue_list[0].put(con_data)
+        self.json_encode_send(0,con_data)
         cur_len = 0
         print('here')
         while cur_len<file_len:
@@ -234,7 +280,8 @@ class chartroom:
                 per_len = file_len-cur_len
             file_data = f.read(per_len)
             send_data = {'cur_len':per_len,'content':base64.b64encode(file_data).decode('utf-8')}
-            self.send_queue_list[2].put(send_data)
+            # self.send_queue_list[2].put(send_data)
+            self.json_encode_send(2,send_data)
             cur_len += per_len
         f.close()
         window.quit()
@@ -312,7 +359,8 @@ class chartroom:
                 break
         if check:
             return
-        self.send_queue_list[1].put(send_str)
+        # self.send_queue_list[1].put(send_str)
+        self.json_encode_send(1,send_str)
         print(send_str)
         self.text_recv_show(send_str,1)
 
@@ -361,7 +409,7 @@ class chartroom:
         for i in range(3):
             self.recv_queue_list.append(queue.Queue())
         for i in range(5):
-            self.send_queue_list.append(queue.Queue())
+            self.send_queue_list.append(PollableQueue())
         self.login()
         print(self.ip_addr)
         print(self.tcp_port)
@@ -369,7 +417,7 @@ class chartroom:
         self.connection()
         mess_send_thread = threading.Thread(target=self.mess_send)
         mess_recv_thread = threading.Thread(target=self.mess_recv)
-        # mess_send_thread.start()
+        mess_send_thread.start()
         mess_recv_thread.start()
         self.main_window()
 
