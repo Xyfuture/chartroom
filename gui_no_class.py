@@ -11,7 +11,8 @@ import os,sys
 import time
 import numpy
 from PIL import Image,ImageTk
-import eventlet
+import pyaudio as pa
+import wave
 
 global_file_seg = 5000
 test_img = 0
@@ -120,6 +121,45 @@ class chartroom:
                 video_send_thread.start()
                 print('command ok')
 
+    def audio_send(self):
+        if(self.choose == 2):
+            return
+        CHUNK = 4096
+        FORMAT = pa.paInt16
+        CHANNELS = 2
+        RATE = 16000
+        # RECORD_SECONDS = 0.05
+        p = pa.PyAudio()
+        stream = p.open(format=FORMAT,channels=CHANNELS,rate=RATE,input=True,frames_per_buffer=CHUNK)
+
+        while not self.video_end:
+            frame = stream.read(CHUNK)
+            self.json_encode_send(4,base64.b64encode(frame).decode('utf-8'))
+            print('audio_send')
+        stream.stop_stream()
+        stream.close()
+        p.terminate()
+
+    def audio_recv(self):
+        if(self.choose == 1):
+            return
+        CHUNK = 4096
+        FORMAT = pa.paInt16
+        CHANNELS = 2
+        RATE = 16000
+        # RECORD_SECONDS = 0.05
+        p = pa.PyAudio()
+        stream = p.open(format=FORMAT,channels=CHANNELS,rate=RATE,output=True,frames_per_buffer=CHUNK)
+        while not self.video_end:
+            if not self.recv_queue_list[2].empty():
+                frame = self.recv_queue_list[2].get()
+                audio_data = base64.b64decode(frame.encode('utf-8'))
+                stream.write(audio_data,CHUNK)
+                print('audio_recv')
+        stream.stop_stream()
+        stream.close()
+        p.terminate()
+
     def call_video_send(self,con=1):
         if con :
             con_data = {'trans_type':'video','trans_command':'start'}
@@ -128,8 +168,11 @@ class chartroom:
         self.video_end = 0
         video_send_thread = threading.Thread(target=self.video_send)
         video_send_thread.start()
+        audio_send_thread = threading.Thread(target=self.audio_send)
+        audio_recv_thread = threading.Thread(target=self.audio_recv)
+        audio_send_thread.start()
+        audio_recv_thread.start()
         self.call_video_recv()
-
 
     def video_send(self):
         cap = cv.VideoCapture("D:\\北斗创新导航\\submit\\路演视频.flv")
@@ -183,7 +226,6 @@ class chartroom:
 
         # self.video_lock.release()
         win.after(40, lambda: self.test_recv(win, labelPic))
-
 
     def video_recv(self,win,labelPic):
         while not self.video_end:
