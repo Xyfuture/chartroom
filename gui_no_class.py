@@ -129,7 +129,10 @@ class chartroom:
             if trans_command == 'start':
                 file_len = data['file_len']
                 file_name = data['file_name']
-                file_recv_thread = threading.Thread(target=self.call_file_recv,args=(file_name,file_len))
+                self.call_queue.put({'num':self.func_count,'func':self.call_file_recv})
+                self.func_args[self.func_count]=file_name
+                file_recv_thread = threading.Thread(target=self.file_recv,args=(self.func_count,file_name,file_len))
+                self.func_count += 1
                 file_recv_thread.start()
         elif trans_type == 'video':
             if trans_command == 'start':
@@ -185,7 +188,9 @@ class chartroom:
         audio_recv_thread = threading.Thread(target=self.audio_recv)
         audio_send_thread.start()
         audio_recv_thread.start()
-        self.call_video_recv()
+        # self.call_video_recv()
+        self.call_queue.put({'num':self.func_count,'func':self.call_video_recv})
+
 
     def video_send(self):
         cap = cv.VideoCapture("D:\\北斗创新导航\\submit\\路演视频.flv")
@@ -202,9 +207,10 @@ class chartroom:
                 self.json_encode_send(3,base64.b64encode(byte_array.tostring()).decode('utf-8'))
                 # time.sleep(1)
 
-    def call_video_recv(self):
+    def call_video_recv(self,num):
         print('call_video_recv')
-        window = tk.Tk()
+        # window = tk.Tk()
+        window = tk.Toplevel()
         window.title('video')
         window.geometry(str(self.video_window_width)+'x'+str(self.video_window_height))
         labelPic = tk.Label(window)#,height=self.video_window_height,width=self.video_window_width)
@@ -212,13 +218,13 @@ class chartroom:
         # video_recv_thread = threading.Thread(target=self.video_recv,args=(window,labelPic))
         # video_recv_thread.start()
         # self.test_recv(window,labelPic)
-        window.after(40, lambda: self.test_recv(window, labelPic))
-        window.mainloop()
-        window.destroy()
+        window.after(20, lambda: self.test_recv(window,labelPic,num))
+        # window.mainloop()
+        # window.destroy()
 
-    def test_recv(self,win,labelPic):
+    def test_recv(self,win,labelPic,num):
         if self.recv_queue_list[1].empty():
-            win.after(40, lambda: self.test_recv(win, labelPic))
+            win.after(20, lambda: self.test_recv(win, labelPic,num))
             return
         data = self.recv_queue_list[1].get()
         data = base64.b64decode(data.encode('utf-8'))
@@ -231,15 +237,13 @@ class chartroom:
         global test_img
         test_2 = ImageTk.PhotoImage(image=temp_img, master=win)
         # tk_img = ImageTk.PhotoImage(image=temp_img,master=win)
-
         # test_img.paste(temp_img)
         test_img = test_2
         labelPic.image = test_img
         labelPic.configure(image=test_img)
-
         # self.video_lock.release()
-        win.after(40, lambda: self.test_recv(win, labelPic))
-
+        win.after(20, lambda: self.test_recv(win, labelPic,num))
+    # 未启用
     def video_recv(self,win,labelPic):
         while not self.video_end:
             a = 0
@@ -275,21 +279,17 @@ class chartroom:
         tk_img = ImageTk.PhotoImage(image=temp_img)
         return tk_img
 
-    def call_file_recv(self,file_name,file_len):
+    def call_file_recv(self,func_num):
+        file_name = self.func_args.pop(func_num)
         file_recv_window = tk.Toplevel()
-        file_recv_window.wm_attributes('-topmost',1)
         file_recv_window.title('file receiving')
         file_recv_window.geometry('100x50')
         show_label = tk.Label(file_recv_window,text='File: '+file_name+' is receving')
         show_label.pack()
-        # file_recv_thread = threading.Thread(target=self.file_recv,args=(file_recv_window,file_name,file_len))
-        # file_recv_thread.start()
-        file_recv_window.after(100,lambda : self.file_recv(file_recv_window,file_name,file_len))
-        file_recv_window.mainloop()
-        # file_recv_window.destroy()
         print('call file recv end')
+        return file_recv_window
 
-    def file_recv(self,window,file_name,file_len):
+    def file_recv(self,func_num,file_name,file_len):
         cur_len = 0
         print('file_len: ',file_len)
         with open(file_name,'wb') as f:
@@ -299,10 +299,9 @@ class chartroom:
                     data = self.recv_queue_list[0].get()
                     cur_len += data['cur_len']
                     f.write(base64.b64decode(data['content'].encode('utf-8')))
-                    # print('file recv')
-                    print(cur_len,file_len)
+                    # print(cur_len,file_len)
             print('quit')
-        window.quit()
+        self.destroy_queue.put(func_num)
         print('recv end')
 
     def call_file_send(self):
@@ -316,21 +315,30 @@ class chartroom:
         file_path_label.pack()
         file_path_entry.pack()
         file_send_button.pack()
-        file_send_window.mainloop()
         # file_send_window.destroy()
         print('call file successful')
 
-    def file_send(self,window,file_path):
+    def window(self):
+        file_sending_window = tk.Toplevel()
+        file_sending_window.wm_attributes('-topmost',1)
+        file_sending_window.title('sending file')
+        file_sending_window.geometry('200x100')
+        file_sending_label = tk.Label(file_sending_window,text='sending')
+        file_sending_label.pack()
+        return file_sending_window
+
+    def file_send(self,win,file_path):
         print('file_send',file_path)
         f = open(file_path,'rb')
+        print('test here')
+        file_sending_window = self.window()
+        file_sending_window.update()
         if not f:
             print('file cannot open')
-            window.quit()
             return
         file_name = os.path.basename(file_path)
         file_len = os.path.getsize(file_path)
         con_data = {'trans_type':'file','trans_command':'start','file_name':file_name,'file_len':file_len}
-        # self.send_queue_list[0].put(con_data)
         self.json_encode_send(0,con_data)
         cur_len = 0
         print('here')
@@ -341,11 +349,12 @@ class chartroom:
                 per_len = file_len-cur_len
             file_data = f.read(per_len)
             send_data = {'cur_len':per_len,'content':base64.b64encode(file_data).decode('utf-8')}
-            # self.send_queue_list[2].put(send_data)
             self.json_encode_send(2,send_data)
             cur_len += per_len
         f.close()
-        window.quit()
+        # time.sleep(10)
+        file_sending_window.destroy()
+        win.destroy()
         print('file send successful')
 
     def login(self):
@@ -439,16 +448,17 @@ class chartroom:
         # recv_scrollbar = tk.Scrollbar(root)
         self.recv_text = tk.Text(self.root) #  ,yscrollcommand=recv_scrollbar.set)
         self.send_text = tk.Text(self.root) # ,textvariable=send_str)
-        self.file_recv_button = tk.Button(self.root,text='file',command=self.call_file_send)
+        self.file_send_button = tk.Button(self.root,text='file',command=self.call_file_send)
         send_button = tk.Button(self.root,text='send>',width=20,height=2,command=lambda : self.text_send(self.send_text))
         video_button = tk.Button(self.root,text='video',width=20,height=2,command=self.call_video_send)
         # recv_scrollbar.pack(side=tk.RIGHT,fill=tk.Y)
         self.recv_text.pack()
         self.send_text.pack()
         video_button.pack()
-        self.file_recv_button.pack()
+        self.file_send_button.pack()
         # recv_scrollbar.config(command=self.recv_text.yview)
         send_button.pack()
+        self.root.after(10,self.call_destroy_window)
         self.root.mainloop()
         print('main_window')
 
@@ -456,12 +466,12 @@ class chartroom:
         try:
             func_info=self.call_queue.get_nowait()
             func = func_info['func']
-            self.window_map[func_info['num']] = func()
+            self.window_map[func_info['num']] = func(func_info['num'])
         except:
             pass
         try:
             win_info=self.destroy_queue.get_nowait()
-            win = self.window_map[win_info['win']]
+            win = self.window_map.pop(win_info)
             win.destroy()
         except:
             pass
@@ -484,8 +494,8 @@ class chartroom:
         self.call_queue=queue.Queue()
         self.destroy_queue=queue.Queue()
         self.window_map={}
-        self.window_count = 0
-
+        self.func_count = 0
+        self.func_args={}
         self.send_queue_list=[]
         self.recv_queue_list=[]
         for i in range(3):
