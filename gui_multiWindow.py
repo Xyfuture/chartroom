@@ -28,11 +28,12 @@ def login_window():
     # addr_lable.place(x=10,y=10)
     log_win.mainloop()
     print('des')
+    # time.sleep(100000)
     log_win.destroy()
 
 
 def des(win):
-    time.sleep(5)
+    time.sleep(1)
     win.quit()
     print('finish')
 
