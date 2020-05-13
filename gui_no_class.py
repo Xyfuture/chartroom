@@ -17,6 +17,8 @@ import wave
 global_file_seg = 5000
 test_img = 0
 
+
+# 可select的队列
 class PollableQueue(queue.Queue):
     def __init__(self):
         super().__init__()
@@ -56,62 +58,53 @@ class chartroom:
     output_width=500
     video_window_width=100
     video_window_height=200
-    tcp_mss = 65495
+    tcp_mss = 65495 #  tcp最大包  有用参数
 
-    def mess_len_send(self,mess):
+    def mess_len_send(self,mess):  # 获取发送的包的长度,然后发送
         length = struct.pack('i',len(mess))
         self.sock.send(length)
         return length
 
-    def mess_len_get(self):
+    def mess_len_get(self):  # 获取需要接收的包的长度
         raw_len = self.sock.recv(4)
         (length,) = struct.unpack('i',raw_len)
         return length
 
-    def json_encode_send(self,num,data):
+    def json_encode_send(self,num,data):  # 将data打包成json格式,添加到对应队列
         json_data = {'type':str(num),'data':data}
         self.send_queue_list[num].put(json.dumps(json_data).encode('utf-8'))
 
     def mess_send(self):
         while True:
-            can_read,_,_ = select.select(self.send_queue_list,[],[])
+            can_read,_,_ = select.select(self.send_queue_list,[],[])  # 可以发送的数据
             for i in can_read:
                 # print('send',i)
                 send_data=i.get()
                 self.mess_len_send(send_data)
                 self.sock.sendall(send_data)
-            # for i in range(5):
-            #     if not self.send_queue_list[i].empty():
-            #         send_data = {"type":str(i),"data":self.send_queue_list[i].get()}
-            #         json_data = json.dumps(send_data).encode('utf-8')
-            #         # print('send',send_data)
-            #         self.mess_len_send(json_data)
-            #         self.sock.sendall(json_data)
 
-    def mess_recv(self):
+    def mess_recv(self):  # 接收数据
         while True:
             length = self.mess_len_get()
             raw_data = b''
-            while length>self.tcp_mss :
+            while length>self.tcp_mss :  # 处理大于tcp_mss的情况
                 raw_data += self.sock.recv(self.tcp_mss)
                 length -= self.tcp_mss
             if length!=0:
                 raw_data += self.sock.recv(length)
-            # raw_data = self.sock.recv(length)
             temp_data=raw_data.decode('utf-8')
-            # temp_data = self.sock.recv(length).decode('utf-8')
             # print('recv',temp_data+'\n')
             try:
-                recv_data = json.loads(temp_data)
-            except:
+                recv_data = json.loads(temp_data)  # 解析为str
+            except:  # 查错
                 print('error')
                 print('data length:', length)
                 print('true len: ', len(raw_data))
                 print('raw_data: ',raw_data)
                 print('decode data', temp_data)
-            data_type = recv_data['type']
-            data = recv_data['data']
-            if data_type == '0':
+            data_type = recv_data['type']  # 数据类型
+            data = recv_data['data']  # 数据本身
+            if data_type == '0':  # 送至不同函数进行处理
                 self.control(data)
             elif data_type == '1':  # 文字信息
                 self.text_recv_show(data,2)
@@ -122,26 +115,26 @@ class chartroom:
             elif data_type == '4':  # 音频信息
                 self.recv_queue_list[2].put(data)
 
-    def control(self, data):
-        trans_type = data['trans_type']
-        trans_command = data['trans_command']
+    def control(self, data): # 针对控制信息进行处理
+        trans_type = data['trans_type']  # 控制类型
+        trans_command = data['trans_command']  # 控制命令
         if trans_type == 'file':
             if trans_command == 'start':
-                file_len = data['file_len']
-                file_name = data['file_name']
-                self.call_queue.put({'num':self.func_count,'func':self.call_file_recv})
-                self.func_args[self.func_count]=file_name
-                file_recv_thread = threading.Thread(target=self.file_recv,args=(self.func_count,file_name,file_len))
-                self.func_count += 1
+                file_len = data['file_len']  # 文件长度
+                file_name = data['file_name']  # 文件名
+                self.call_queue.put({'num':self.func_count,'func':self.call_file_recv})  # 启用gui,就画个框,没啥用
+                self.func_args[self.func_count]=file_name  # gui传参
+                file_recv_thread = threading.Thread(target=self.file_recv,args=(self.func_count,file_name,file_len))  # 启用文件接收线程
+                self.func_count += 1  # 计数器+1,计数器目的是为了唯一标定一个窗口,方便打开,关闭,传参数
                 file_recv_thread.start()
         elif trans_type == 'video':
-            if trans_command == 'start':
+            if trans_command == 'start': #  视频功能  对面传来请求,这边需要接收也需要发送,因此调用发送给,发送函数中会调用接收
                 video_send_thread = threading.Thread(target=self.call_video_send,args=(0,))
                 video_send_thread.start()
-                print('command ok')
+                # print('command ok')
 
-    def audio_send(self):
-        if(self.choose == 2):
+    def audio_send(self):  # 音频发送 单独线程
+        if(self.choose == 2):  #这个目的是为避免测试时同时调用,引发bug
             return
         CHUNK = 4096
         FORMAT = pa.paInt16
@@ -156,7 +149,7 @@ class chartroom:
         stream.close()
         p.terminate()
 
-    def audio_recv(self):
+    def audio_recv(self): # 音频接收  单独线程
         if(self.choose == 1):
             return
         CHUNK = 4096
@@ -176,74 +169,66 @@ class chartroom:
         stream.close()
         p.terminate()
 
-    def call_video_send(self,con=1):
-        if con :
-            con_data = {'trans_type':'video','trans_command':'start'}
+    def call_video_send(self,con=1):  # 启动视频程序
+        if con : # 主动请求
+            con_data = {'trans_type':'video','trans_command':'start'}  # 发送相应数据
             # self.send_queue_list[0].put(con_data)
             self.json_encode_send(0,con_data)
-        self.video_end = 0
-        video_send_thread = threading.Thread(target=self.video_send)
+        self.video_end = 0 # 标记,video_end = 1所有与视频有关的功能退出
+        video_send_thread = threading.Thread(target=self.video_send)  # 视频发送线程
         video_send_thread.start()
-        audio_send_thread = threading.Thread(target=self.audio_send)
-        audio_recv_thread = threading.Thread(target=self.audio_recv)
+        audio_send_thread = threading.Thread(target=self.audio_send)  # 音频发送线程
+        audio_recv_thread = threading.Thread(target=self.audio_recv)  # 音频接收线程
         audio_send_thread.start()
         audio_recv_thread.start()
         # self.call_video_recv()
-        self.call_queue.put({'num':self.func_count,'func':self.call_video_recv})
+        self.call_queue.put({'num':self.func_count,'func':self.call_video_recv})  # 启动视频接收gui
 
 
-    def video_send(self):
-        cap = cv.VideoCapture("D:\\北斗创新导航\\submit\\路演视频.flv")
+    def video_send(self):  # 视频发送程序  需改进 加入速度控制
+        cap = cv.VideoCapture("D:\\北斗创新导航\\submit\\路演视频.flv")  # 本地视频
+        # cap = cv.VideoCapture(0)  # 启动摄像头
         while not self.video_end:
-            if self.choose == 2:
+            if self.choose == 2:  # 避免单机重复调用
                 ret = 0
             else:
-                ret,frame = cap.read()
+                ret,frame = cap.read()  # 获取一帧
             if ret:
-                frame = cv.resize(frame,(1280,720),interpolation=cv.INTER_CUBIC)
+                frame = cv.resize(frame,(1280,720),interpolation=cv.INTER_CUBIC) # 压缩
                 byte_img = cv.imencode('.png',frame)[1]
                 byte_array = numpy.array(byte_img)
-                # self.send_queue_list[3].put(base64.b64encode(byte_array.tostring()).decode('utf-8'))
                 self.json_encode_send(3,base64.b64encode(byte_array.tostring()).decode('utf-8'))
-                # time.sleep(1)
 
-    def call_video_recv(self,num):
-        print('call_video_recv')
-        # window = tk.Tk()
-        window = tk.Toplevel()
+    def call_video_recv(self,num):  # 视频接收gui
+        # print('call_video_recv')
+        window = tk.Toplevel()  # 窗口
         window.title('video')
         window.geometry(str(self.video_window_width)+'x'+str(self.video_window_height))
         labelPic = tk.Label(window)#,height=self.video_window_height,width=self.video_window_width)
         labelPic.pack()
-        # video_recv_thread = threading.Thread(target=self.video_recv,args=(window,labelPic))
-        # video_recv_thread.start()
-        # self.test_recv(window,labelPic)
-        window.after(20, lambda: self.test_recv(window,labelPic,num))
-        # window.mainloop()
-        # window.destroy()
+        window.after(20, lambda: self.test_recv(window,labelPic,num))  # 通过定时器 以轮询的方式刷新画面
 
-    def test_recv(self,win,labelPic,num):
+
+    def test_recv(self,win,labelPic,num): # 画面刷新   需改进速度
         if self.recv_queue_list[1].empty():
             win.after(20, lambda: self.test_recv(win, labelPic,num))
             return
-        data = self.recv_queue_list[1].get()
-        data = base64.b64decode(data.encode('utf-8'))
-        cv_img = cv.imdecode(numpy.frombuffer(data, numpy.uint8), cv.IMREAD_COLOR)
-        # cv.imshow('test',cv_img)
+        data = self.recv_queue_list[1].get() #　获取矩阵
+        data = base64.b64decode(data.encode('utf-8')) # base64解码
+        cv_img = cv.imdecode(numpy.frombuffer(data, numpy.uint8), cv.IMREAD_COLOR)  # 转换成opencv图像
+        # cv.imshow('test',cv_img)  # opencv自带的gui 效果也还可以
         # cv.waitKey(50)
-        rgba_img = cv.cvtColor(cv_img, cv.COLOR_BGR2RGBA)
+        rgba_img = cv.cvtColor(cv_img, cv.COLOR_BGR2RGBA)  # 转换成rgba类型的图像
         # tk_img = self.pic_resize(rgba_img)
-        temp_img = Image.fromarray(rgba_img)
-        global test_img
-        test_2 = ImageTk.PhotoImage(image=temp_img, master=win)
+        temp_img = Image.fromarray(rgba_img)  # 转换成pillow中Image类型的图像
+        tk_img = ImageTk.PhotoImage(image=temp_img, master=win)  # 转化成tkinter需要的图像
         # tk_img = ImageTk.PhotoImage(image=temp_img,master=win)
         # test_img.paste(temp_img)
-        test_img = test_2
-        labelPic.image = test_img
-        labelPic.configure(image=test_img)
+        labelPic.image = tk_img
+        labelPic.configure(image=tk_img)
         # self.video_lock.release()
-        win.after(20, lambda: self.test_recv(win, labelPic,num))
-    # 未启用
+        win.after(20, lambda: self.test_recv(win, labelPic,num))  # 定时器刷新
+    # 未启用 已废
     def video_recv(self,win,labelPic):
         while not self.video_end:
             a = 0
@@ -253,7 +238,7 @@ class chartroom:
                 data = base64.b64decode(data.encode('utf-8'))
                 cv_img = cv.imdecode(numpy.frombuffer(data,numpy.uint8),cv.IMREAD_COLOR)
                 # cv.imshow('test',cv_img)
-                # cv.waitKey(50)
+                #                 # cv.waitKey(50)
                 rgba_img = cv.cvtColor(cv_img,cv.COLOR_BGR2RGBA)
                 # tk_img = self.pic_resize(rgba_img)
                 temp_img = Image.fromarray(rgba_img)
@@ -273,39 +258,39 @@ class chartroom:
                 # print('successful')
         win.quit()
 
-    def pic_resize(self,img):
+    def pic_resize(self,img):  # 图片大小调节,未启用
         temp_img = Image.fromarray(img)
         temp_img.resize((self.video_window_width,self.video_window_height),Image.ANTIALIAS)
         tk_img = ImageTk.PhotoImage(image=temp_img)
         return tk_img
 
-    def call_file_recv(self,func_num):
-        file_name = self.func_args.pop(func_num)
-        file_recv_window = tk.Toplevel()
+    def call_file_recv(self,func_num):  # 调用文件接收 再control函数中被启动
+        file_name = self.func_args.pop(func_num) # 获取参数
+        file_recv_window = tk.Toplevel() #显示窗口
         file_recv_window.title('file receiving')
         file_recv_window.geometry('100x50')
         show_label = tk.Label(file_recv_window,text='File: '+file_name+' is receving')
         show_label.pack()
-        print('call file recv end')
-        return file_recv_window
+        # print('call file recv end')
+        return file_recv_window # 将窗口返回方便关闭
 
     def file_recv(self,func_num,file_name,file_len):
-        cur_len = 0
-        print('file_len: ',file_len)
-        with open(file_name,'wb') as f:
+        cur_len = 0 # 文件已接收长度
+        # print('file_len: ',file_len)
+        with open(file_name,'wb') as f:  # 打开文件
             while cur_len<file_len :
                 # print('in file recv loop')
-                if not self.recv_queue_list[0].empty():
+                if not self.recv_queue_list[0].empty():  # 有能接收的东西
                     data = self.recv_queue_list[0].get()
                     cur_len += data['cur_len']
-                    f.write(base64.b64decode(data['content'].encode('utf-8')))
+                    f.write(base64.b64decode(data['content'].encode('utf-8'))) # 解码写入文件
                     # print(cur_len,file_len)
-            print('quit')
-        self.destroy_queue.put(func_num)
-        print('recv end')
+            # print('quit')
+        self.destroy_queue.put(func_num)  # 关闭窗口
+        # print('recv end')
 
-    def call_file_send(self):
-        file_send_window = tk.Toplevel()
+    def call_file_send(self):  # 用户点击按钮 启动发送
+        file_send_window = tk.Toplevel()  # 显示窗口
         file_send_window.wm_attributes('-topmost',1)
         file_send_window.title('file send')
         file_send_window.geometry('200x100')
@@ -315,10 +300,11 @@ class chartroom:
         file_path_label.pack()
         file_path_entry.pack()
         file_send_button.pack()
+        # send button 点击后调用发送功能
         # file_send_window.destroy()
-        print('call file successful')
+        # print('call file successful')
 
-    def window(self):
+    def file_send_window(self):  # 发送中显示的窗口
         file_sending_window = tk.Toplevel()
         file_sending_window.wm_attributes('-topmost',1)
         file_sending_window.title('sending file')
@@ -327,22 +313,21 @@ class chartroom:
         file_sending_label.pack()
         return file_sending_window
 
-    def file_send(self,win,file_path):
+    def file_send(self,win,file_path): #  文件发送, 运行在主线程
         print('file_send',file_path)
         f = open(file_path,'rb')
-        print('test here')
-        file_sending_window = self.window()
-        file_sending_window.update()
+        file_sending_window = self.file_send_window()# 显示窗口
+        file_sending_window.update()  # 刷新一下窗口,可能不刷新显示太慢
         if not f:
             print('file cannot open')
             return
         file_name = os.path.basename(file_path)
         file_len = os.path.getsize(file_path)
         con_data = {'trans_type':'file','trans_command':'start','file_name':file_name,'file_len':file_len}
-        self.json_encode_send(0,con_data)
+        self.json_encode_send(0,con_data)  # 发送请求
         cur_len = 0
         print('here')
-        while cur_len<file_len:
+        while cur_len<file_len:  # 按照 cur_len长度打包
             if file_len-cur_len>global_file_seg:
                 per_len = global_file_seg
             else :
@@ -355,9 +340,10 @@ class chartroom:
         # time.sleep(10)
         file_sending_window.destroy()
         win.destroy()
-        print('file send successful')
+        # 发送结束,关闭这两个窗口
+        # print('file send successful')
 
-    def login(self):
+    def login(self):  # 登录界面  需要修改
         log_win = tk.Tk()
         log_win.title('login')
         log_win.geometry('300x500')
@@ -391,7 +377,7 @@ class chartroom:
         log_win.mainloop()
         log_win.destroy()
 
-    def connection(self):
+    def connection(self):  # 进行socket连接处理
         if self.choose == 1:
             listen_sock = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
             listen_sock.bind(((self.ip_addr,self.tcp_port)))
@@ -413,18 +399,18 @@ class chartroom:
             self.sock.send(self.cur_name.encode('utf-8'))
             self.peer_name = self.sock.recv(1000).decode('utf-8')
 
-    def connect_window(self,window,listen_sock):
+    def connect_window(self,window,listen_sock): #  对于监听模式 需要单独开一个线程处理,不过这个实现不好,不应该用多线程,应使用after方法,还没改
         self.sock,addr = listen_sock.accept()
         self.peer_name = self.sock.recv(1000).decode('utf-8')
         print('peer_name ',self.peer_name)
         self.sock.send(self.cur_name.encode('utf-8'))
         window.quit()
 
-    def text_send(self,str):
-        send_str = str.get('0.0','end')
+    def text_send(self,str):  # 发送文字
+        send_str = str.get('0.0','end')  # 获取文字
         str.delete('0.0', 'end')
         check = 1
-        for c in send_str:
+        for c in send_str:  # 空信息不发送
             if c != '\n' and c != ' ':
                 check = 0
                 break
@@ -435,7 +421,7 @@ class chartroom:
         print(send_str)
         self.text_recv_show(send_str,1)
 
-    def text_recv_show(self,show_str,user):
+    def text_recv_show(self,show_str,user):  # 文字接收并显示  虽然是多线程(mess_recv中),但是目前没bug
         if user == 1:
             show_str = self.cur_name+':'+show_str
         elif user == 2:
@@ -444,40 +430,39 @@ class chartroom:
 
     def main_window(self):
         self.root = tk.Tk()
-        # send_str = tk.StringVar()
-        # recv_scrollbar = tk.Scrollbar(root)
-        self.recv_text = tk.Text(self.root) #  ,yscrollcommand=recv_scrollbar.set)
-        self.send_text = tk.Text(self.root) # ,textvariable=send_str)
+
+        self.recv_text = tk.Text(self.root)
+        self.send_text = tk.Text(self.root)
         self.file_send_button = tk.Button(self.root,text='file',command=self.call_file_send)
         send_button = tk.Button(self.root,text='send>',width=20,height=2,command=lambda : self.text_send(self.send_text))
         video_button = tk.Button(self.root,text='video',width=20,height=2,command=self.call_video_send)
-        # recv_scrollbar.pack(side=tk.RIGHT,fill=tk.Y)
+
         self.recv_text.pack()
         self.send_text.pack()
         video_button.pack()
         self.file_send_button.pack()
-        # recv_scrollbar.config(command=self.recv_text.yview)
+
         send_button.pack()
-        self.root.after(10,self.call_destroy_window)
+        self.root.after(10,self.call_destroy_window)  # 定时器
         self.root.mainloop()
         print('main_window')
 
-    def call_destroy_window(self):
-        try:
-            func_info=self.call_queue.get_nowait()
-            func = func_info['func']
-            self.window_map[func_info['num']] = func(func_info['num'])
-        except:
+    def call_destroy_window(self): # 这个函数更改了新窗口显示,原先是多线程直接开一个,这个是在主线程中在root上面显示新窗口
+        try:  # 队列中可能没东西,这个是阻塞的取东西
+            func_info=self.call_queue.get_nowait() # 需要打开的窗口
+            func = func_info['func'] # 窗口函数,可以直接传
+            self.window_map[func_info['num']] = func(func_info['num']) # num就是那个计数器唯一表示了一个窗口,把窗口存起来,方便之后关闭
+        except:  # 没东西就退出
             pass
         try:
-            win_info=self.destroy_queue.get_nowait()
-            win = self.window_map.pop(win_info)
-            win.destroy()
+            win_info=self.destroy_queue.get_nowait()  # 去除需要关闭的窗口的num
+            win = self.window_map.pop(win_info) # 取出窗口
+            win.destroy()  # 关闭
         except:
             pass
-        self.root.after(10,self.call_destroy_window)
+        self.root.after(10,self.call_destroy_window)  # 定时器 刷新
 
-    def confirm(self,addr,port,ser_cli,name,window):
+    def confirm(self,addr,port,ser_cli,name,window): # 将log_in窗口中数据获取处理
         # cur_name 自己的名字 peer_name 对方的名字
         self.ip_addr = addr.get()
         self.tcp_port = int(port.get())
@@ -488,7 +473,7 @@ class chartroom:
             self.choose = 2
         window.quit()
 
-    def __init__(self):
+    def __init__(self):   # 初始化函数
         self.video_lock = threading.Lock()
         self.video_end = 0
         self.call_queue=queue.Queue()
