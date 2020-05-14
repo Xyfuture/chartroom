@@ -13,10 +13,12 @@ import numpy
 from PIL import Image,ImageTk
 import pyaudio as pa
 import wave
+import pickle
+
 
 global_file_seg = 5000
 test_img = 0
-
+ctk=0
 
 # 可select的队列
 class PollableQueue(queue.Queue):
@@ -64,6 +66,9 @@ class chartroom:
         json_data = {'type':str(num),'data':data}
         self.send_queue_list[num].put(json.dumps(json_data).encode('utf-8'))
 
+    def video_byte_send(self,data):
+        self.send_queue_list[3].put(data)
+
     def mess_send(self):
         while True:
             can_read,_,_ = select.select(self.send_queue_list,[],[])  # 可以发送的数据
@@ -77,12 +82,25 @@ class chartroom:
         while True:
             length = self.mess_len_get()
             raw_data = b''
+            totoal_length = length
             while length>self.tcp_mss :  # 处理大于tcp_mss的情况
                 raw_data += self.sock.recv(self.tcp_mss)
                 length -= self.tcp_mss
             if length!=0:
                 raw_data += self.sock.recv(length)
-            temp_data=raw_data.decode('utf-8')
+            if raw_data[totoal_length-1] == 118:
+                print('success')
+                # print(raw_data[0:length])
+                # print(raw_data[0:length-1])
+                self.recv_queue_list[1].put(raw_data[0:totoal_length-1])
+                continue
+            # print(raw_data+'\n')
+            # print(raw_data[1])
+            try:
+                temp_data=raw_data.decode('utf-8')
+            except:
+                pass
+                # print(raw_data)
             # print('recv',temp_data+'\n')
             try:
                 recv_data = json.loads(temp_data)  # 解析为str
@@ -212,20 +230,28 @@ class chartroom:
         # cap = cv.VideoCapture("D:\\北斗创新导航\\submit\\路演视频.flv")  # 本地视频
         if self.choose == 1:
             cap = cv.VideoCapture(0)  # 启动摄像头
+        a=0
         while not self.video_end:
             if self.other_args['video_speed'] == 1:
-                print('pause')
+                # print('pause')
                 continue
             self.other_args['video_speed'] = 1
             if self.choose == 2:  # 避免单机重复调用
                 ret = 0
+                return
             else:
                 ret,frame = cap.read()  # 获取一帧
             if ret:
-                frame = cv.resize(frame,(1280,720),interpolation=cv.INTER_CUBIC) # 压缩
-                byte_img = cv.imencode('.png',frame)[1]
-                byte_array = numpy.array(byte_img)
-                self.json_encode_send(3,base64.b64encode(byte_array.tostring()).decode('utf-8'))
+                img = Image.fromarray(cv.cvtColor(frame,cv.COLOR_BGR2RGBA))
+                byte_frame = pickle.dumps(img)
+                # if not a:
+                    # print(byte_frame)
+                # a = 1
+                self.video_byte_send(byte_frame+b'v')
+                # frame = cv.resize(frame,(1280,720),interpolation=cv.INTER_CUBIC) # 压缩
+                # byte_img = cv.imencode('.png',frame)[1]
+                # byte_array = numpy.array(byte_img)
+                # self.json_encode_send(3,base64.b64encode(byte_array.tostring()).decode('utf-8'))
 
     def call_video_recv(self,num):  # 视频接收gui
         print('call_video_recv')
@@ -236,18 +262,35 @@ class chartroom:
         labelPic = tk.Label(window)#,height=self.video_window_height,width=self.video_window_width)
         labelPic.pack()
         # print('call_video_recv_win')
-        window.after(20, lambda: self.test_recv(window,labelPic,num))  # 通过定时器 以轮询的方式刷新画面
+        window.after(5, lambda: self.test_recv(window,labelPic,num))  # 通过定时器 以轮询的方式刷新画面
 
     def test_recv(self,win,labelPic,num): # 画面刷新   需改进速度
         # print('show func')
         # if self.video_end:
         #     self.destroy_queue.put(num)
         #     return
+        global ctk
         self.other_args['video_speed'] = 0
         if self.recv_queue_list[1].empty():
-            win.after(20, lambda: self.test_recv(win, labelPic,num))
+            win.after(5, lambda: self.test_recv(win, labelPic,num))
             # print('empty')
             return
+        byte_data =self.recv_queue_list[1].get()
+        # cv_img = pickle.loads(byte_data)
+        temp_img = pickle.loads(byte_data)
+        # rgb_img = cv.cvtColor(cv_img,cv.COLOR_BGR2RGBA)
+        # temp_img = Image.fromarray(rgb_img)
+        # temp_img=byte_data
+        global test_img
+        test_img = ImageTk.PhotoImage(image=temp_img)
+        # if ctk == 0:
+        # labelPic.image=test_img
+        labelPic.configure(image=test_img)
+        ctk = 1
+        # cv.imshow('test',cv_img)
+        # cv.waitKey(1)
+        win.after(5, lambda: self.test_recv(win, labelPic, num))
+        '''
         data = self.recv_queue_list[1].get() #　获取矩阵
         data = base64.b64decode(data.encode('utf-8')) # base64解码
         cv_img = cv.imdecode(numpy.frombuffer(data, numpy.uint8), cv.IMREAD_COLOR)  # 转换成opencv图像
@@ -265,7 +308,7 @@ class chartroom:
         self.other_args['video_speed'] = 0
         # self.video_lock.release()
         win.after(20, lambda: self.test_recv(win, labelPic,num))  # 定时器刷新
-
+        '''
     # 未启用 已废
     def video_recv(self,win,labelPic):
         while not self.video_end:
@@ -481,7 +524,7 @@ class chartroom:
         self.file_send_button.pack()
         tk.Button(self.root,text='quit',command=self.root.destroy).pack()
         send_button.pack()
-        self.root.after(10,self.call_destroy_window)  # 定时器
+        self.root.after(5,self.call_destroy_window)  # 定时器
         self.root.mainloop()
         print('main_window')
 
@@ -498,7 +541,7 @@ class chartroom:
             win.destroy()  # 关闭
         except:
             pass
-        self.root.after(10,self.call_destroy_window)  # 定时器 刷新
+        self.root.after(5,self.call_destroy_window)  # 定时器 刷新
 
     def confirm(self,addr,port,ser_cli,name,window): # 将log_in窗口中数据获取处理
         # cur_name 自己的名字 peer_name 对方的名字

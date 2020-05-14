@@ -2,6 +2,8 @@ import multiprocessing as mp
 import cv2 as cv
 import socket
 import numpy as np
+import pickle
+import struct
 
 cap = cv.VideoCapture(0)
 
@@ -19,12 +21,15 @@ def f(conn):
 def trans(conn,sock):
     while True:
         img = conn.recv()
-        byte_img = cv.imencode('.png',img)[1]
-        trans_byte=np.array(byte_img)
+        # byte_img = cv.imencode('.png',img)[1]
+        # trans_byte=np.array(byte_img)
+        trans_byte=pickle.dumps(img)
 
+        # print(img.shape)
         # print(type(byte_img))
         # byte_img = cv.imencode('jpg',img)[1]
-        sock.send(trans_byte.tostring())
+        sock.send(struct.pack('i',len(trans_byte)))
+        sock.sendall(trans_byte)
         conn.send(0)
 
 
