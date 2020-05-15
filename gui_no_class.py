@@ -82,17 +82,17 @@ class chartroom:
         while True:
             length = self.mess_len_get()
             raw_data = b''
-            totoal_length = length
+            total_length = length
             while length>self.tcp_mss :  # 处理大于tcp_mss的情况
                 raw_data += self.sock.recv(self.tcp_mss)
                 length -= self.tcp_mss
             if length!=0:
                 raw_data += self.sock.recv(length)
-            if raw_data[totoal_length-1] == 118:
+            if raw_data[total_length-1] == 118:
                 print('success')
                 # print(raw_data[0:length])
                 # print(raw_data[0:length-1])
-                self.recv_queue_list[1].put(raw_data[0:totoal_length-1])
+                self.recv_queue_list[1].put(raw_data[0:total_length-1])
                 continue
             # print(raw_data+'\n')
             # print(raw_data[1])
