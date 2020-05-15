@@ -13,10 +13,12 @@ import numpy
 from PIL import Image,ImageTk
 import pyaudio as pa
 import wave
+import pickle
+
 
 global_file_seg = 5000
 test_img = 0
-
+ctk=0
 
 # 可select的队列
 class PollableQueue(queue.Queue):
@@ -48,16 +50,6 @@ class PollableQueue(queue.Queue):
 
 
 class chartroom:
-    window_width = 500
-    window_height= 700
-    button_width=20
-    button_height=2
-    input_height=100
-    input_width= 500
-    output_height=500
-    output_width=500
-    video_window_width=100
-    video_window_height=200
     tcp_mss = 65495 #  tcp最大包  有用参数
 
     def mess_len_send(self,mess):  # 获取发送的包的长度,然后发送
@@ -66,33 +58,72 @@ class chartroom:
         return length
 
     def mess_len_get(self):  # 获取需要接收的包的长度
-        raw_len = self.sock.recv(4)
-        (length,) = struct.unpack('i',raw_len)
-        return length
+        try:
+            raw_len = self.sock.recv(4)
+            self.sock_lock.acquire()
+            print("raw_len",len(raw_len))
+            if not raw_len:
+                self.sock_lock.release()
+                return 0
+            self.sock_lock.release()
+            (length,) = struct.unpack('i',raw_len)
+            return length
+        except:
+            print("except")
+            self.close_cnt = 1
+            return 0
 
     def json_encode_send(self,num,data):  # 将data打包成json格式,添加到对应队列
         json_data = {'type':str(num),'data':data}
         self.send_queue_list[num].put(json.dumps(json_data).encode('utf-8'))
 
+    def video_byte_send(self,data):
+        self.send_queue_list[3].put(data)
+
     def mess_send(self):
-        while True:
-            can_read,_,_ = select.select(self.send_queue_list,[],[])  # 可以发送的数据
+        while self.main_end == 0:
+            can_read,_,_ = select.select(self.send_queue_list,[],[],0.5)  # 可以发送的数据
             for i in can_read:
                 # print('send',i)
                 send_data=i.get()
                 self.mess_len_send(send_data)
                 self.sock.sendall(send_data)
+        print("mess_send return")
 
     def mess_recv(self):  # 接收数据
-        while True:
+        while self.main_end == 0:
             length = self.mess_len_get()
+            if length == 0:
+                self.main_end = 1
+                print("mess_recv not get length")
+                # self.root.destroy()
+                if not self.close_cnt:
+                    self.close_cnt = 1
+                    # self.sock.shutdown(2)
+                    self.sock.close()
+                print("mess_recv return")
+                self.destroy_queue.put(-1)
+                return 
             raw_data = b''
-            while length>self.tcp_mss :  # 处理大于tcp_mss的情况
+            totoal_length = length
+            while length > self.tcp_mss :  # 处理大于tcp_mss的情况
                 raw_data += self.sock.recv(self.tcp_mss)
                 length -= self.tcp_mss
             if length!=0:
                 raw_data += self.sock.recv(length)
-            temp_data=raw_data.decode('utf-8')
+            if raw_data[totoal_length-1] == 118:
+                print('success')
+                # print(raw_data[0:length])
+                # print(raw_data[0:length-1])
+                self.recv_queue_list[1].put(raw_data[0:totoal_length-1])
+                continue
+            # print(raw_data+'\n')
+            # print(raw_data[1])
+            try:
+                temp_data=raw_data.decode('utf-8')
+            except:
+                pass
+                # print(raw_data)
             # print('recv',temp_data+'\n')
             try:
                 recv_data = json.loads(temp_data)  # 解析为str
@@ -114,6 +145,7 @@ class chartroom:
                 self.recv_queue_list[1].put(data)
             elif data_type == '4':  # 音频信息
                 self.recv_queue_list[2].put(data)
+        print("mess_recv return")
 
     def control(self, data): # 针对控制信息进行处理
         trans_type = data['trans_type']  # 控制类型
@@ -129,9 +161,23 @@ class chartroom:
                 file_recv_thread.start()
         elif trans_type == 'video':
             if trans_command == 'start': #  视频功能  对面传来请求,这边需要接收也需要发送,因此调用发送给,发送函数中会调用接收
+                self.call_queue.put({'num':self.func_count,'func':self.video_accept_window})
+                self.func_count+=1
+            elif trans_command == 'accept':
                 video_send_thread = threading.Thread(target=self.call_video_send,args=(0,))
                 video_send_thread.start()
-                # print('command ok')
+            elif trans_command == 'reject':
+                return
+            elif trans_command == 'end':
+                self.video_end = 1
+        elif trans_type == 'main_window':
+            if trans_command == 'close':
+                print("main_window close is ok")
+                self.main_end == 1
+                self.root.destroy()
+                exit(0)
+                
+
 
     def audio_send(self):  # 音频发送 单独线程
         if(self.choose == 2):  #这个目的是为避免测试时同时调用,引发bug
@@ -169,11 +215,38 @@ class chartroom:
         stream.close()
         p.terminate()
 
+    def video_accept_reject(self,t,num):
+        if t == 1:
+            con_data = {'trans_type': 'video', 'trans_command': 'accept'}
+            self.json_encode_send(0,con_data)
+            self.call_video_send(0)
+        elif t == 0:
+            con_data = {'trans_type': 'video', 'trans_command': 'reject'}
+            self.json_encode_send(0,con_data)
+        self.destroy_queue.put(num)
+
+    def video_accept_window(self,num):
+        accept_inquire_window = tk.Toplevel()
+        accept = tk.Button(accept_inquire_window,text='yes',command=lambda : self.video_accept_reject(1,num))
+        reject = tk.Button(accept_inquire_window,text='no',command=lambda : self.video_accept_reject(0,num))
+        accept.pack()
+        reject.pack()
+        return accept_inquire_window
+
+    # def video_request_window(self,num):
+    #     request_window = tk.Toplevel()
+    #     tk.Label(request_window,text='waiting for accept')
+    #     return request_window
+
+
     def call_video_send(self,con=1):  # 启动视频程序
         if con : # 主动请求
             con_data = {'trans_type':'video','trans_command':'start'}  # 发送相应数据
             # self.send_queue_list[0].put(con_data)
             self.json_encode_send(0,con_data)
+            return
+        print('call send')
+        self.other_args['video_speed'] = 0
         self.video_end = 0 # 标记,video_end = 1所有与视频有关的功能退出
         video_send_thread = threading.Thread(target=self.video_send)  # 视频发送线程
         video_send_thread.start()
@@ -183,36 +256,87 @@ class chartroom:
         audio_recv_thread.start()
         # self.call_video_recv()
         self.call_queue.put({'num':self.func_count,'func':self.call_video_recv})  # 启动视频接收gui
-
+        self.func_count+=1
 
     def video_send(self):  # 视频发送程序  需改进 加入速度控制
-        #cap = cv.VideoCapture("D:\\北斗创新导航\\submit\\路演视频.flv")  # 本地视频
-        cap = cv.VideoCapture(0)  # 启动摄像头
+        # cap = cv.VideoCapture("D:\\北斗创新导航\\submit\\路演视频.flv")  # 本地视频
+        if self.choose == 1:
+            cap = cv.VideoCapture(0)  # 启动摄像头
+        a=0
         while not self.video_end:
+            if self.other_args['video_speed'] == 1:
+                # print('pause')
+                continue
+            self.other_args['video_speed'] = 1
             if self.choose == 2:  # 避免单机重复调用
                 ret = 0
+                return
             else:
                 ret,frame = cap.read()  # 获取一帧
             if ret:
-                frame = cv.resize(frame,(1280,720),interpolation=cv.INTER_CUBIC) # 压缩
-                byte_img = cv.imencode('.png',frame)[1]
-                byte_array = numpy.array(byte_img)
-                self.json_encode_send(3,base64.b64encode(byte_array.tostring()).decode('utf-8'))
+                img = Image.fromarray(cv.cvtColor(frame,cv.COLOR_BGR2RGBA))
+                byte_frame = pickle.dumps(img)
+                # if not a:
+                    # print(byte_frame)
+                # a = 1
+                self.video_byte_send(byte_frame+b'v')
+                # frame = cv.resize(frame,(1280,720),interpolation=cv.INTER_CUBIC) # 压缩
+                # byte_img = cv.imencode('.png',frame)[1]
+                # byte_array = numpy.array(byte_img)
+                # self.json_encode_send(3,base64.b64encode(byte_array.tostring()).decode('utf-8'))
+        cap.release()
+    
+    def hang_off_video(self,window):
+        self.video_end=1
+        window.destroy()
+        con_data = {'trans_type':'video','trans_command':'end'}
+        self.json_encode_send(0,con_data)
 
     def call_video_recv(self,num):  # 视频接收gui
-        # print('call_video_recv')
+        print('call_video_recv')
         window = tk.Toplevel()  # 窗口
+        print('call_video_recv2345')
         window.title('video')
-        window.geometry(str(self.video_window_width)+'x'+str(self.video_window_height))
+        # window.geometry(str(self.video_window_width)+'x'+str(self.video_window_height))
         labelPic = tk.Label(window)#,height=self.video_window_height,width=self.video_window_width)
         labelPic.pack()
-        window.after(20, lambda: self.test_recv(window,labelPic,num))  # 通过定时器 以轮询的方式刷新画面
-
+        # print('call_video_recv_win')
+        tk.Button(window, text='hang off', width=20, height=2, command=lambda : self.hang_off_video(window)).pack()
+        window.after(5, lambda: self.test_recv(window,labelPic,num))  # 通过定时器 以轮询的方式刷新画面
 
     def test_recv(self,win,labelPic,num): # 画面刷新   需改进速度
-        if self.recv_queue_list[1].empty():
-            win.after(20, lambda: self.test_recv(win, labelPic,num))
+        print('show func')
+        if self.video_end:
+            
+            mess_info = tk.Toplevel()
+            tk.Label(mess_info, text='hung off', width=30, height=2).pack()
+            tk.Button(mess_info,text='ok',width=20,height=2,command=mess_info.destroy).pack()
+            win.destroy()
+            self.destroy_queue.put(num)
             return
+        global ctk
+        self.other_args['video_speed'] = 0
+        if self.recv_queue_list[1].empty():
+            win.after(5, lambda: self.test_recv(win, labelPic,num))
+            # print('empty')
+            return
+        byte_data =self.recv_queue_list[1].get()
+        # cv_img = pickle.loads(byte_data)
+        temp_img = pickle.loads(byte_data)
+        # rgb_img = cv.cvtColor(cv_img,cv.COLOR_BGR2RGBA)
+        # temp_img = Image.fromarray(rgb_img)
+        # temp_img=byte_data
+        global test_img
+        test_img = ImageTk.PhotoImage(image=temp_img)
+        # if ctk == 0:
+        # labelPic.image=test_img
+        labelPic.configure(image=test_img)
+        ctk = 1
+        # cv.imshow('test',cv_img)
+        # cv.waitKey(1)
+        win.after(5, lambda: self.test_recv(win, labelPic, num))
+
+        '''
         data = self.recv_queue_list[1].get() #　获取矩阵
         data = base64.b64decode(data.encode('utf-8')) # base64解码
         cv_img = cv.imdecode(numpy.frombuffer(data, numpy.uint8), cv.IMREAD_COLOR)  # 转换成opencv图像
@@ -220,14 +344,17 @@ class chartroom:
         # cv.waitKey(50)
         rgba_img = cv.cvtColor(cv_img, cv.COLOR_BGR2RGBA)  # 转换成rgba类型的图像
         # tk_img = self.pic_resize(rgba_img)
+        global test_img
         temp_img = Image.fromarray(rgba_img)  # 转换成pillow中Image类型的图像
-        tk_img = ImageTk.PhotoImage(image=temp_img, master=win)  # 转化成tkinter需要的图像
+        test_img = ImageTk.PhotoImage(image=temp_img, master=win)  # 转化成tkinter需要的图像
         # tk_img = ImageTk.PhotoImage(image=temp_img,master=win)
         # test_img.paste(temp_img)
-        labelPic.image = tk_img
-        labelPic.configure(image=tk_img)
+        labelPic.image = test_img
+        labelPic.configure(image=test_img)
+        self.other_args['video_speed'] = 0
         # self.video_lock.release()
         win.after(20, lambda: self.test_recv(win, labelPic,num))  # 定时器刷新
+        '''
     # 未启用 已废
     def video_recv(self,win,labelPic):
         while not self.video_end:
@@ -361,7 +488,7 @@ class chartroom:
         choose.set('c')
         ser_check = tk.Radiobutton(log_win, text='Server', variable=choose, value='s')
         cli_check = tk.Radiobutton(log_win, text='Client', variable=choose, value='c')
-        quit_button = tk.Button(log_win, text='quit', width=10, height=2, command=log_win.quit)
+        quit_button = tk.Button(log_win, text='quit', width=10, height=2, command=log_win.destroy)
         confirm_button = tk.Button(log_win,text='enter',width=10,height=2,command=lambda : self.confirm(addr_str,port_str,choose,name_str,log_win))
         
         addr_lable.grid(row=0)
@@ -432,11 +559,25 @@ class chartroom:
         self.recv_text.config(state="normal")
         self.recv_text.insert('end',show_str)
         self.recv_text.config(state="disabled")
+    
+    def main_pro_exit(self):
+        con_data = {'trans_type':'main_window','trans_command':'close'}
+        # self.json_encode_send(0,con_data)
+        self.main_end = 1
+        # self.sock_lock.acquire()
+        if not self.close_cnt:
+            self.close_cnt = 1
+            # self.sock.shutdown(2)
+            self.sock.close()
+        # self.root.destroy()
+        print('main_pro_exit ok')
+        # self.sock_lock.release()
 
     def main_window(self):
         self.root = tk.Tk()
         self.root.geometry('600x450')
         self.recv_text = tk.Text(self.root)
+        self.close_cnt = 0
         self.send_text = tk.Text(self.root,height=6)
         self.file_send_button = tk.Button(self.root,text='file',width=20,height=2,command=self.call_file_send)
         send_button = tk.Button(self.root,text='send>',width=20,height=2,command=lambda : self.text_send(self.send_text))
@@ -447,7 +588,7 @@ class chartroom:
         video_button.grid(row=2)
         self.file_send_button.grid(row=2,column=1)
         send_button.grid(row=2,column=2)
-        tk.Button(self.root, text='quit', width=20, height=2, command=self.root.destroy).grid(row=2,column=3)
+        tk.Button(self.root, text='quit', width=20, height=2, command=self.main_pro_exit).grid(row=2,column=3)
         
         self.root.after(10,self.call_destroy_window)  # 定时器
         self.root.mainloop()
@@ -462,11 +603,14 @@ class chartroom:
             pass
         try:
             win_info=self.destroy_queue.get_nowait()  # 去除需要关闭的窗口的num
+            if win_info == -1:
+                self.root.destroy()
+                return
             win = self.window_map.pop(win_info) # 取出窗口
             win.destroy()  # 关闭
         except:
             pass
-        self.root.after(10,self.call_destroy_window)  # 定时器 刷新
+        self.root.after(5,self.call_destroy_window)  # 定时器 刷新
 
     def confirm(self,addr,port,ser_cli,name,window): # 将log_in窗口中数据获取处理
         # cur_name 自己的名字 peer_name 对方的名字
@@ -481,12 +625,15 @@ class chartroom:
 
     def __init__(self):   # 初始化函数
         self.video_lock = threading.Lock()
+        self.sock_lock = threading.Lock()
         self.video_end = 0
+        self.main_end = 0
         self.call_queue=queue.Queue()
         self.destroy_queue=queue.Queue()
         self.window_map={}
         self.func_count = 0
         self.func_args={}
+        self.other_args={}
         self.send_queue_list=[]
         self.recv_queue_list=[]
         for i in range(3):
@@ -508,3 +655,5 @@ class chartroom:
 if __name__ == '__main__':
     a = chartroom()
     print('exit')
+    print(threading.active_count())
+    print(threading.current_thread())
