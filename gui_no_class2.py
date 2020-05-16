@@ -377,7 +377,7 @@ class chartroom:
         choose.set('c')
         ser_check = tk.Radiobutton(log_win, text='Server', variable=choose, value='s')
         cli_check = tk.Radiobutton(log_win, text='Client', variable=choose, value='c')
-        quit_button = tk.Button(log_win, text='quit', width=10, height=2, command=log_win.quit)
+        quit_button = tk.Button(log_win, text='quit', width=10, height=2, command=lambda : exit(0))
         confirm_button = tk.Button(log_win,text='enter',width=10,height=2,command=lambda : self.confirm(addr_str,port_str,choose,name_str,log_win))
         
         addr_lable.grid(row=0)
