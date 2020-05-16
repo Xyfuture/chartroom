@@ -244,6 +244,7 @@ class chartroom:
                 byte_frame = pickle.dumps(img)
                 self.video_byte_send(byte_frame+b'v') # v做标识符
         cap.release()
+        # print('close camera')
     
     def hang_off_video(self,window):
         self.video_end=1

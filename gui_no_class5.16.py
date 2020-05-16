@@ -91,7 +91,7 @@ class chartroom:
             length = self.mess_len_get()
             if length == 0:
                 mess_info = tk.Toplevel()
-                tk.Label(mess_info, text='hung off', width=30, height=2).pack()
+                tk.Label(mess_info, text='connection off', width=30, height=2).pack()
                 tk.Button(mess_info,text='ok',width=20,height=2,command=lambda : self.sock_close(mess_info)).pack()
                 return
             raw_data = b''
@@ -205,6 +205,8 @@ class chartroom:
 
     def video_accept_window(self,num):
         accept_inquire_window = tk.Toplevel()
+        accept_inquire_window.geometry("200x300")
+        tk.Label(accept_inquire_window,text='Video Request')
         accept = tk.Button(accept_inquire_window,text='yes',command=lambda : self.video_accept_reject(1,num))
         reject = tk.Button(accept_inquire_window,text='no',command=lambda : self.video_accept_reject(0,num))
         accept.pack()
@@ -551,8 +553,6 @@ class chartroom:
             self.recv_queue_list.append(queue.Queue())
         for i in range(5):
             self.send_queue_list.append(PollableQueue())
-        
-        
         connection_ok = 0
         while(not connection_ok):
             self.login()
