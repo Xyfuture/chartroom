@@ -59,7 +59,6 @@ class chartroom:
             win.destroy()
             self.destroy_queue.put(-1)
             self.video_end=1
-            
 
     def mess_len_get(self):  # 获取需要接收的包的长度
         try :
@@ -362,7 +361,6 @@ class chartroom:
         win.destroy()
         # 发送结束,关闭这两个窗口
 
-
     def login(self):  # 登录界面  需要修改
         log_win = tk.Tk()
         log_win.title('login')
@@ -515,7 +513,6 @@ class chartroom:
 
     def confirm(self,addr,port,ser_cli,name,window): # 将log_in窗口中数据获取处理
         # cur_name 自己的名字 peer_name 对方的名字
-        
         self.ip_addr = addr.get()
         if not re.match(r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$", self.ip_addr):
             mess_info = tk.Toplevel()
@@ -529,7 +526,6 @@ class chartroom:
             tk.Button(mess_info,text='ok',width=20,height=2,command=mess_info.destroy).pack()
             return 
         self.tcp_port = int(port.get())
-
         self.cur_name = name.get()
         if ser_cli.get() == 's':
             self.choose = 1
@@ -555,11 +551,23 @@ class chartroom:
             self.recv_queue_list.append(queue.Queue())
         for i in range(5):
             self.send_queue_list.append(PollableQueue())
-        self.login()
-        print(self.ip_addr)
-        print(self.tcp_port)
-        print(self.choose)
-        self.connection()
+        
+        
+        connection_ok = 0
+        while(not connection_ok):
+            self.login()
+            try:
+                print(self.ip_addr)
+                print(self.tcp_port)
+                print(self.choose)
+                self.connection()
+                connection_ok = 1
+            except:
+                mess_info = tk.Tk()
+                tk.Label(mess_info, text='connection failed', width=30, height=2).pack()
+                tk.Button(mess_info,text='ok',width=20,height=2,command=mess_info.destroy).pack()
+                tk.mainloop()
+
         self.sock_sate.set()
         mess_send_thread = threading.Thread(target=self.mess_send)
         mess_recv_thread = threading.Thread(target=self.mess_recv)
